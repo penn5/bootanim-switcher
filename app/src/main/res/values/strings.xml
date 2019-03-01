@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Bootanimation Switcher</string>
+    <string name="action_settings">Settings</string>
+    <string name="display_dashboard_summary">Bootanimation</string>
+</resources>
