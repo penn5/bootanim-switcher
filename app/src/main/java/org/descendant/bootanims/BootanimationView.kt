@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.os.Parcel
+import android.os.Parcelable
 import android.util.AttributeSet
 import android.util.Log
 import android.view.View
@@ -28,6 +30,7 @@ class BootanimationView : View {
     private val tag = "BootanimationView"
     private val descFile = "desc.txt"
 
+    private var path: File? = null
     private var zipFile: ZipFile? = null
     private var zipEntries: Enumeration<out ZipEntry>? = null
     private var zippedImgs: HashMap<String, ZipEntry>? = null
@@ -36,13 +39,15 @@ class BootanimationView : View {
     private var currentEntryNum = 0
     private var nextFrame = 0
 
-    val frames = ConcurrentHashMap<String, Bitmap>()
+    private val frames = ConcurrentHashMap<String, Bitmap>()
 
     private var virtualBootComplete = false
-    private var ended = false
+    private var ended = true
 
     private var curCount = 1
     private var delaying = 0
+
+    private var loaderThread: Thread? = null
 
     constructor(context: Context) : super(context)
 
@@ -50,7 +55,90 @@ class BootanimationView : View {
 
     constructor(context: Context, attrs: AttributeSet, defStyle: Int) : super(context, attrs, defStyle)
 
-    fun setAnimation(file: File) {
+    override fun onSaveInstanceState(): Parcelable? {
+        val superState = super.onSaveInstanceState()
+        val savedState = SavedState(superState)
+        savedState.sourcePath = path?.path ?: return superState
+        savedState.entryNum = currentEntryNum
+        savedState.frameNum = nextFrame
+        savedState.ended = ended
+        savedState.booted = virtualBootComplete
+        savedState.loopCount = curCount
+        savedState.delayed = delaying
+        return super.onSaveInstanceState()
+    }
+
+    override fun onRestoreInstanceState(state: Parcelable?) {
+        super.onRestoreInstanceState((state as? SavedState)?.superState ?: state)
+        if (state is SavedState) {
+            setAnimation(File(state.sourcePath))
+            switchEntry(state.entryNum)
+            nextFrame = state.frameNum
+            ended = state.ended
+            virtualBootComplete = state.booted
+            curCount = state.loopCount
+            delaying = state.delayed
+            if (ended.not())
+                tick() // Resume
+
+        }
+
+    }
+
+
+    internal class SavedState : View.BaseSavedState {
+
+        var sourcePath: String = ""
+        var entryNum: Int = 0
+        var frameNum: Int = 0
+        var ended: Boolean = false
+        var booted: Boolean = false
+        var loopCount: Int = 0
+        var delayed: Int = 0
+
+
+        constructor(source: Parcel) : super(source) {
+            sourcePath = source.readString()!!
+            entryNum = source.readInt()
+            frameNum = source.readInt()
+            ended = source.readByte().toInt() > 0
+            booted = source.readByte().toInt() > 0
+            loopCount = source.readInt()
+            delayed = source.readInt()
+        }
+
+        constructor(superState: Parcelable?) : super(superState)
+
+        override fun writeToParcel(out: Parcel, flags: Int) {
+            super.writeToParcel(out, flags)
+            out.writeString(sourcePath)
+            out.writeInt(entryNum)
+            out.writeInt(frameNum)
+            out.writeByte((if (ended) 1 else 0).toByte())
+            out.writeByte((if (booted) 1 else 0).toByte())
+            out.writeInt(loopCount)
+            out.writeInt(delayed)
+        }
+
+        companion object {
+            @Suppress("unused") // It is required to be Parcelable. It is read by Android.
+            @JvmField
+            val CREATOR: Parcelable.Creator<SavedState> = object : Parcelable.Creator<SavedState> {
+
+                override fun createFromParcel(source: Parcel): SavedState {
+                    return SavedState(source)
+                }
+
+                override fun newArray(size: Int): Array<SavedState?> {
+                    return arrayOfNulls(size)
+                }
+            }
+        }
+    }
+
+
+    public fun setAnimation(file: File) {
+        path = file
         zipFile = ZipFile(file)
         val inputStream = zipFile!!.getInputStream(zipFile!!.getEntry(descFile))
         desc = AnimDescriptor.fromReader(BufferedReader(InputStreamReader(inputStream)))
@@ -73,7 +161,7 @@ class BootanimationView : View {
                                 folder = entry.name.split("/").first()
                                 zippedImgs!![entry.name.split("/").first() + "/" + (i[folder] ?: 0).toString()] =
                                     entry // i starts at 1
-                                i.put(folder, (i[folder] ?: 0) + 1)
+                                i[folder] = (i[folder] ?: 0) + 1
                                 Log.e(tag, folder + (i[folder].toString()))
                             }
                         }
@@ -85,6 +173,7 @@ class BootanimationView : View {
         prepareEntry(0)
         currentEntry = desc!!.entries[0]
         currentEntryNum = 0
+        nextFrame = 0
 
         startLoaderThread()
 
@@ -97,18 +186,18 @@ class BootanimationView : View {
 
 
     private fun startLoaderThread() {
-        thread(start = true) {
+        loaderThread?.interrupt()
+        loaderThread = thread(start = true) {
 
             for (img in zippedImgs!!.keys) {
+                if (Thread.currentThread().isInterrupted)
+                    break
                 frames[img] = loadBitmap(img) ?: continue
             }
-            Log.e("background thread", frames.toString())
-            Log.e("background thread", frames.size.toString())
-            Log.e("background thread", zippedImgs?.size.toString())
         }
     }
 
-    fun switchEntry(entry: Int) {
+    private fun switchEntry(entry: Int) {
         prepareEntry(entry)
         currentEntryNum = entry
         currentEntry = desc!!.entries[entry]
@@ -116,24 +205,18 @@ class BootanimationView : View {
         setBackgroundColor(currentEntry!!.background)
     }
 
-    fun prepareEntry(entry: Int) {
+    private fun prepareEntry(entry: Int) {
         //currentEntry = desc!!.entries[entry]
         val trimEntry = zipFile!!.getEntry(desc!!.entries[entry].path)
         if (trimEntry != null) {
-            // There's a trim file!
-            //TODO: load it
-        } else {
-            val trimStream = zipFile!!.getInputStream(trimEntry)
-            var trimString = ""
-            while (trimStream.available() > 0) {
-                trimString += trimStream.read()
-            }
+            val trimStream = BufferedReader(InputStreamReader(zipFile!!.getInputStream(trimEntry)))
             var trimTmp: List<String>
             desc!!.entries[entry].trim = ConcurrentHashMap()
-            for ((i, line) in trimString.lines().withIndex()) {
+            var i = 0
+            for (line in trimStream.lines()) {
                 if (line.isNotEmpty()) {
                     trimTmp = line.split(delimiters = *arrayOf("x", "+"))
-                    desc!!.entries[entry].trim[i] =
+                    desc!!.entries[entry].trim[i++] =
                         Rect(trimTmp[0].toInt(), trimTmp[1].toInt(), trimTmp[2].toInt(), trimTmp[3].toInt())
                 }
             }
@@ -217,15 +300,32 @@ class BootanimationView : View {
         }
     }
 
-    fun start() {
+    public fun start() {
+        if (frames.size == 0) {
+            startLoaderThread()
+        }
+        ended = false
+        virtualBootComplete = false
         tick()
     }
 
-    fun stop() {
+    public fun restart() {
+        switchEntry(0)
+        nextFrame = 0
+        start()
+    }
+
+    public fun stop() {
+        loaderThread?.interrupt()
+        frames.clear()
         ended = true
     }
 
-    fun end() {
+    public fun pause() {
+        ended = true
+    }
+
+    public fun end() {
         virtualBootComplete = true
     }
 

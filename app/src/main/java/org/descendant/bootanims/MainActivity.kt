@@ -2,15 +2,18 @@ package org.descendant.bootanims
 
 import android.os.Bundle
 import android.os.Handler
+import android.util.Log
 import android.view.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentPagerAdapter
+import androidx.viewpager.widget.ViewPager
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.android.synthetic.main.activity_main.*
 import kotlinx.android.synthetic.main.fragment_main.view.*
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 class MainActivity : AppCompatActivity() {
 
@@ -35,6 +38,7 @@ class MainActivity : AppCompatActivity() {
 
         // Set up the ViewPager with the sections adapter.
         container.adapter = mSectionsPagerAdapter
+        container.addOnPageChangeListener(mSectionsPagerAdapter!!)
 
         fab.setOnClickListener { view ->
             Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
@@ -64,21 +68,62 @@ class MainActivity : AppCompatActivity() {
     }
 
 
+    private val tag = "MainActivity"
+
     /**
      * A [FragmentPagerAdapter] that returns a fragment corresponding to
      * one of the sections/tabs/pages.
      */
-    inner class SectionsPagerAdapter(fm: FragmentManager) : FragmentPagerAdapter(fm) {
+    inner class SectionsPagerAdapter(fm: FragmentManager) : FragmentPagerAdapter(fm), ViewPager.OnPageChangeListener {
+
+        var selectedPage: Int = 0
+        private var pages: ConcurrentHashMap<Int, PlaceholderFragment> = ConcurrentHashMap()
+        override fun onPageScrollStateChanged(state: Int) {
+            val tmpPage = selectedPage
+            when (state) {
+                ViewPager.SCROLL_STATE_DRAGGING -> pages[tmpPage]?.view?.bootanimationView?.pause()
+                ViewPager.SCROLL_STATE_SETTLING -> pages[tmpPage]?.view?.bootanimationView?.pause()
+                ViewPager.SCROLL_STATE_IDLE -> {
+                    pages[tmpPage]?.view?.bootanimationView?.start()
+                    Handler().postDelayed({ pages[tmpPage]?.view?.bootanimationView?.end() }, 10000)
+                }
+
+            }
+        }
+
+        override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) {
+        }
+
+        override fun onPageSelected(position: Int) {
+            if (selectedPage != position) {
+                pages[selectedPage]?.view?.bootanimationView?.stop() // Clear the cache of it to save RAM
+                selectedPage = position
+                Log.w(tag, "page changed!!!")
+                pages[position]?.view?.bootanimationView?.restart()
+            } else {
+                Log.w(tag, "same page")
+                pages[position]?.view?.bootanimationView?.start()
+                Handler().postDelayed({ pages[position]?.view?.bootanimationView?.end() }, 10000)
+            }
+        }
+
 
         override fun getItem(position: Int): Fragment {
             // getItem is called to instantiate the fragment for the given page.
             // Return a PlaceholderFragment (defined as a static inner class below).
-            return PlaceholderFragment.newInstance(position + 1)
+            val page = PlaceholderFragment.newInstance(position + 1)
+            return page
         }
 
         override fun getCount(): Int {
             // Show 3 total pages.
             return 3
+        }
+
+        override fun instantiateItem(container: ViewGroup, position: Int): Any {
+            val ret = super.instantiateItem(container, position)
+            pages[position] = ret as PlaceholderFragment
+            return ret
         }
     }
 
@@ -93,8 +138,7 @@ class MainActivity : AppCompatActivity() {
         ): View? {
             val rootView = inflater.inflate(R.layout.fragment_main, container, false)
             rootView.bootanimationView.setAnimation(File("/system/media/bootanimation.zip"))
-            rootView.bootanimationView.start()
-            Handler().postDelayed({ rootView.bootanimationView.end() }, 10000)
+
             return rootView
         }
 
