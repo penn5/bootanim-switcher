@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentPagerAdapter
+import androidx.fragment.app.FragmentStatePagerAdapter
 import androidx.viewpager.widget.ViewPager
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.android.synthetic.main.activity_main.*
@@ -74,7 +75,8 @@ class MainActivity : AppCompatActivity() {
      * A [FragmentPagerAdapter] that returns a fragment corresponding to
      * one of the sections/tabs/pages.
      */
-    inner class SectionsPagerAdapter(fm: FragmentManager) : FragmentPagerAdapter(fm), ViewPager.OnPageChangeListener {
+    inner class SectionsPagerAdapter(fm: FragmentManager) : FragmentStatePagerAdapter(fm),
+        ViewPager.OnPageChangeListener {
 
         var selectedPage: Int = 0
         private var pages: ConcurrentHashMap<Int, PlaceholderFragment> = ConcurrentHashMap()
@@ -84,7 +86,11 @@ class MainActivity : AppCompatActivity() {
                 ViewPager.SCROLL_STATE_DRAGGING -> pages[tmpPage]?.view?.bootanimationView?.pause()
                 ViewPager.SCROLL_STATE_SETTLING -> pages[tmpPage]?.view?.bootanimationView?.pause()
                 ViewPager.SCROLL_STATE_IDLE -> {
-                    pages[tmpPage]?.view?.bootanimationView?.start()
+                    if (pages[tmpPage]?.view?.bootanimationView?.isStopped() != true) {
+                        pages[tmpPage]?.view?.bootanimationView?.start() // Acts how `resume` would if it existed
+                    } else {
+                        pages[tmpPage]?.view?.bootanimationView?.restart()
+                    }
                     Handler().postDelayed({ pages[tmpPage]?.view?.bootanimationView?.end() }, 10000)
                 }
 

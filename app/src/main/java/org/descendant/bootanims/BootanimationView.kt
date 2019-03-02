@@ -43,11 +43,14 @@ class BootanimationView : View {
 
     private var virtualBootComplete = false
     private var ended = true
+    private var stopped = true
 
     private var curCount = 1
     private var delaying = 0
 
     private var loaderThread: Thread? = null
+
+    private var lastBitmap: Bitmap? = null
 
     constructor(context: Context) : super(context)
 
@@ -62,6 +65,7 @@ class BootanimationView : View {
         savedState.entryNum = currentEntryNum
         savedState.frameNum = nextFrame
         savedState.ended = ended
+        savedState.stopped = stopped
         savedState.booted = virtualBootComplete
         savedState.loopCount = curCount
         savedState.delayed = delaying
@@ -75,6 +79,7 @@ class BootanimationView : View {
             switchEntry(state.entryNum)
             nextFrame = state.frameNum
             ended = state.ended
+            stopped = state.stopped
             virtualBootComplete = state.booted
             curCount = state.loopCount
             delaying = state.delayed
@@ -92,6 +97,7 @@ class BootanimationView : View {
         var entryNum: Int = 0
         var frameNum: Int = 0
         var ended: Boolean = false
+        var stopped: Boolean = false
         var booted: Boolean = false
         var loopCount: Int = 0
         var delayed: Int = 0
@@ -102,6 +108,7 @@ class BootanimationView : View {
             entryNum = source.readInt()
             frameNum = source.readInt()
             ended = source.readByte().toInt() > 0
+            stopped = source.readByte().toInt() > 0
             booted = source.readByte().toInt() > 0
             loopCount = source.readInt()
             delayed = source.readInt()
@@ -115,6 +122,7 @@ class BootanimationView : View {
             out.writeInt(entryNum)
             out.writeInt(frameNum)
             out.writeByte((if (ended) 1 else 0).toByte())
+            out.writeByte((if (stopped) 1 else 0).toByte())
             out.writeByte((if (booted) 1 else 0).toByte())
             out.writeInt(loopCount)
             out.writeInt(delayed)
@@ -230,16 +238,24 @@ class BootanimationView : View {
             return
         if (currentEntry == null)
             return
-        if (ended)
+        if (ended) {
+            canvas.drawBitmap(
+                lastBitmap ?: return,
+                null,
+                currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect),
+                null
+            )
             return
+        }
         if ((delaying > -1) && (delaying < currentEntry!!.pause)) {
             delaying++
             return
         }
 
         if (frames.containsKey(currentEntry!!.path + "/" + nextFrame.toString())) {
+            lastBitmap = frames[currentEntry!!.path + "/" + nextFrame.toString()]!!
             canvas.drawBitmap(
-                frames[currentEntry!!.path + "/" + nextFrame.toString()]!!, null,
+                lastBitmap!!, null,
                 currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect), null
             )
             if ((currentEntry!!.count == curCount) || virtualBootComplete) {
@@ -250,29 +266,30 @@ class BootanimationView : View {
             Log.e(tag, currentEntry!!.path + "/" + nextFrame.toString())
             // We don't care, it's only done if the background thread is behind.
             // Quick fail out due to risk of IndexOutOfBoundException
-            canvas.drawBitmap(
-                loadBitmap(currentEntry!!.path + "/" + nextFrame.toString()) ?: {
-                    Log.w(tag, "tmpzipentry null, starting again from $nextFrame")
+            lastBitmap = loadBitmap(currentEntry!!.path + "/" + nextFrame.toString()) ?: {
+                Log.w(tag, "tmpzipentry null, starting again from $nextFrame")
 
-                    if (currentEntry!!.command == 'p' && virtualBootComplete) { // In theory only c and p work, but aosp does this.
-                        stop()
-                    }
+                if (currentEntry!!.command == 'p' && virtualBootComplete) { // In theory only c and p work, but aosp does this.
+                    stop()
+                }
 
-                    if ((currentEntry!!.count == curCount) || virtualBootComplete) {
-                        if (currentEntryNum + 1 >= desc!!.entries.size)
-                            stop() // Index out of bounds here because we have finished the animation, stop *right now*
-                        else
-                            switchEntry(currentEntryNum + 1)
-                    } else {
-                        curCount += 1
-                    }
-
-                    nextFrame = 0
-                    if (ended.not())
-                        loadBitmap(currentEntry!!.path + "/" + nextFrame.toString())!!
+                if ((currentEntry!!.count == curCount) || virtualBootComplete) {
+                    if (currentEntryNum + 1 >= desc!!.entries.size)
+                        stop() // Index out of bounds here because we have finished the animation, stop *right now*
                     else
-                        null
-                }() ?: return,
+                        switchEntry(currentEntryNum + 1)
+                } else {
+                    curCount += 1
+                }
+
+                nextFrame = 0
+                if (ended.not())
+                    loadBitmap(currentEntry!!.path + "/" + nextFrame.toString())!!
+                else
+                    null
+            }() ?: return
+            canvas.drawBitmap(
+                lastBitmap!!,
                 null,
                 currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect),
                 null
@@ -305,6 +322,7 @@ class BootanimationView : View {
             startLoaderThread()
         }
         ended = false
+        stopped = false
         virtualBootComplete = false
         tick()
     }
@@ -319,6 +337,7 @@ class BootanimationView : View {
         loaderThread?.interrupt()
         frames.clear()
         ended = true
+        stopped = true
     }
 
     public fun pause() {
@@ -327,6 +346,16 @@ class BootanimationView : View {
 
     public fun end() {
         virtualBootComplete = true
+    }
+
+    public fun isEnded(): Boolean {
+        // Ended is actually paused
+        return ended
+    }
+
+    public fun isStopped(): Boolean {
+        // Stopped is when it's complete.
+        return stopped
     }
 
     private fun tick() {
