@@ -45,7 +45,7 @@ class AnimDescriptorEntry(
                 throw InvalidAnimationException(AnimErrors.BROKEN_DESC, "Invalid path")
             if (elems.size > 4) {
                 if (elems[4].length != 7)
-                    throw InvalidAnimationException(AnimErrors.BROKEN_DESC, "Invalid RGBHEX ${elems}")
+                    throw InvalidAnimationException(AnimErrors.BROKEN_DESC, "Invalid RGBHEX $elems")
                 try {
                     background = elems[4].toInt(16)
                 } catch (e: Exception) {

@@ -28,6 +28,13 @@ class MainActivity : AppCompatActivity() {
      */
     private var mSectionsPagerAdapter: SectionsPagerAdapter? = null
 
+    public fun play(view: View?) {
+        // does nothing if null
+        (view as? BootanimationView)?.restart()
+        Handler().postDelayed({ (view as? BootanimationView)?.end() }, 10000)
+
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -78,7 +85,7 @@ class MainActivity : AppCompatActivity() {
     inner class SectionsPagerAdapter(fm: FragmentManager) : FragmentStatePagerAdapter(fm),
         ViewPager.OnPageChangeListener {
 
-        var selectedPage: Int = 0
+        private var selectedPage: Int = 0
         private var pages: ConcurrentHashMap<Int, PlaceholderFragment> = ConcurrentHashMap()
         override fun onPageScrollStateChanged(state: Int) {
             val tmpPage = selectedPage
@@ -86,10 +93,11 @@ class MainActivity : AppCompatActivity() {
                 ViewPager.SCROLL_STATE_DRAGGING -> pages[tmpPage]?.view?.bootanimationView?.pause()
                 ViewPager.SCROLL_STATE_SETTLING -> pages[tmpPage]?.view?.bootanimationView?.pause()
                 ViewPager.SCROLL_STATE_IDLE -> {
-                    if (pages[tmpPage]?.view?.bootanimationView?.isStopped() != true) {
-                        pages[tmpPage]?.view?.bootanimationView?.start() // Acts how `resume` would if it existed
+                    if (pages[tmpPage]?.view?.bootanimationView?.isStopped() != false) {
+                        Log.e(tag, "restarting")
+                        play(pages[tmpPage]?.view?.bootanimationView) // Acts how `resume` would if it existed
                     } else {
-                        pages[tmpPage]?.view?.bootanimationView?.restart()
+                        pages[tmpPage]?.view?.bootanimationView?.start()
                     }
                     Handler().postDelayed({ pages[tmpPage]?.view?.bootanimationView?.end() }, 10000)
                 }
@@ -98,6 +106,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) {
+
         }
 
         override fun onPageSelected(position: Int) {
@@ -105,7 +114,7 @@ class MainActivity : AppCompatActivity() {
                 pages[selectedPage]?.view?.bootanimationView?.stop() // Clear the cache of it to save RAM
                 selectedPage = position
                 Log.w(tag, "page changed!!!")
-                pages[position]?.view?.bootanimationView?.restart()
+                play(pages[position]?.view?.bootanimationView)
             } else {
                 Log.w(tag, "same page")
                 pages[position]?.view?.bootanimationView?.start()
@@ -117,8 +126,7 @@ class MainActivity : AppCompatActivity() {
         override fun getItem(position: Int): Fragment {
             // getItem is called to instantiate the fragment for the given page.
             // Return a PlaceholderFragment (defined as a static inner class below).
-            val page = PlaceholderFragment.newInstance(position + 1)
-            return page
+            return PlaceholderFragment.newInstance(position + 1)
         }
 
         override fun getCount(): Int {
@@ -144,7 +152,8 @@ class MainActivity : AppCompatActivity() {
         ): View? {
             val rootView = inflater.inflate(R.layout.fragment_main, container, false)
             rootView.bootanimationView.setAnimation(File("/system/media/bootanimation.zip"))
-
+            rootView.bootanimationView.loadFirstFrame()
+            rootView.bootanimationView.invalidate()
             return rootView
         }
 
@@ -153,7 +162,7 @@ class MainActivity : AppCompatActivity() {
              * The fragment argument representing the section number for this
              * fragment.
              */
-            private val ARG_SECTION_NUMBER = "section_number"
+            private const val ARG_SECTION_NUMBER = "section_number"
 
             /**
              * Returns a new instance of this fragment for the given section

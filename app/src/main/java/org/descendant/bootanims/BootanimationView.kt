@@ -46,7 +46,7 @@ class BootanimationView : View {
     private var stopped = true
 
     private var curCount = 1
-    private var delaying = 0
+    private var delaying = -1
 
     private var loaderThread: Thread? = null
 
@@ -235,20 +235,21 @@ class BootanimationView : View {
         super.onDraw(canvas)
 
         if (zipFile == null)
-            return
+            ended = true
         if (currentEntry == null)
-            return
-        if (ended) {
+            ended = true
+        if ((delaying > -1) && (delaying < currentEntry!!.pause)) {
+            delaying++
+        } else {
+            delaying = -1
+        }
+        if (ended || ((delaying > -1) && (delaying < currentEntry!!.pause))) {
             canvas.drawBitmap(
                 lastBitmap ?: return,
                 null,
                 currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect),
                 null
             )
-            return
-        }
-        if ((delaying > -1) && (delaying < currentEntry!!.pause)) {
-            delaying++
             return
         }
 
@@ -266,7 +267,7 @@ class BootanimationView : View {
             Log.e(tag, currentEntry!!.path + "/" + nextFrame.toString())
             // We don't care, it's only done if the background thread is behind.
             // Quick fail out due to risk of IndexOutOfBoundException
-            lastBitmap = loadBitmap(currentEntry!!.path + "/" + nextFrame.toString()) ?: {
+            (loadBitmap(currentEntry!!.path + "/" + nextFrame.toString()) ?: {
                 Log.w(tag, "tmpzipentry null, starting again from $nextFrame")
 
                 if (currentEntry!!.command == 'p' && virtualBootComplete) { // In theory only c and p work, but aosp does this.
@@ -287,7 +288,7 @@ class BootanimationView : View {
                     loadBitmap(currentEntry!!.path + "/" + nextFrame.toString())!!
                 else
                     null
-            }() ?: return
+            }())?.let { lastBitmap = it }
             canvas.drawBitmap(
                 lastBitmap!!,
                 null,
@@ -365,5 +366,9 @@ class BootanimationView : View {
             nextFrame++
             invalidate()
         }
+    }
+
+    public fun loadFirstFrame() {
+        lastBitmap = loadBitmap(desc!!.entries[0].path + "/0")
     }
 }
