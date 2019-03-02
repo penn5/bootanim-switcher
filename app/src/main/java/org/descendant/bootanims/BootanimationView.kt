@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import kotlin.collections.HashMap
+import kotlin.concurrent.thread
 
 /**
  * Plays a bootanimation. WIP. Use setAnimation from Java to start
@@ -35,33 +36,19 @@ class BootanimationView : View {
     private var currentEntryNum = 0
     private var nextFrame = 0
 
-    private var bitmapFactory: BitmapFactory? = null
-
-    private var tmpZipEntry: ZipEntry? = null
-    private var tmpBitmap: Bitmap? = null
-
-    val frames = ConcurrentHashMap<Int, Bitmap>()
+    val frames = ConcurrentHashMap<String, Bitmap>()
 
     private var virtualBootComplete = false
     private var ended = false
 
     private var curCount = 1
+    private var delaying = 0
 
-    constructor(context: Context) : super(context) {
-        init(null, 0)
-    }
+    constructor(context: Context) : super(context)
 
-    constructor(context: Context, attrs: AttributeSet) : super(context, attrs) {
-        init(attrs, 0)
-    }
+    constructor(context: Context, attrs: AttributeSet) : super(context, attrs)
 
-    constructor(context: Context, attrs: AttributeSet, defStyle: Int) : super(context, attrs, defStyle) {
-        init(attrs, defStyle)
-    }
-
-    private fun init(attrs: AttributeSet?, defStyle: Int) {
-        //TODO
-    }
+    constructor(context: Context, attrs: AttributeSet, defStyle: Int) : super(context, attrs, defStyle)
 
     fun setAnimation(file: File) {
         zipFile = ZipFile(file)
@@ -99,7 +86,26 @@ class BootanimationView : View {
         currentEntry = desc!!.entries[0]
         currentEntryNum = 0
 
+        startLoaderThread()
 
+    }
+
+
+    private fun loadBitmap(name: String): Bitmap? {
+        return BitmapFactory.decodeStream(zipFile!!.getInputStream(zippedImgs!![name] ?: return null))
+    }
+
+
+    private fun startLoaderThread() {
+        thread(start = true) {
+
+            for (img in zippedImgs!!.keys) {
+                frames[img] = loadBitmap(img) ?: continue
+            }
+            Log.e("background thread", frames.toString())
+            Log.e("background thread", frames.size.toString())
+            Log.e("background thread", zippedImgs?.size.toString())
+        }
     }
 
     fun switchEntry(entry: Int) {
@@ -127,7 +133,7 @@ class BootanimationView : View {
             for ((i, line) in trimString.lines().withIndex()) {
                 if (line.isNotEmpty()) {
                     trimTmp = line.split(delimiters = *arrayOf("x", "+"))
-                    desc!!.entries[entry].trim!![i] =
+                    desc!!.entries[entry].trim[i] =
                         Rect(trimTmp[0].toInt(), trimTmp[1].toInt(), trimTmp[2].toInt(), trimTmp[3].toInt())
                 }
             }
@@ -141,44 +147,56 @@ class BootanimationView : View {
             return
         if (currentEntry == null)
             return
+        if (ended)
+            return
+        if ((delaying > -1) && (delaying < currentEntry!!.pause)) {
+            delaying++
+            return
+        }
 
-        if (frames.containsKey(nextFrame))
+        if (frames.containsKey(currentEntry!!.path + "/" + nextFrame.toString())) {
             canvas.drawBitmap(
-                frames[nextFrame]!!, null,
-                currentEntry!!.trim!!.getOrDefault(nextFrame, desc!!.defaultRect), null
+                frames[currentEntry!!.path + "/" + nextFrame.toString()]!!, null,
+                currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect), null
             )
-        else {
-            // We don't care, it's only done if the background thread is behind.
-            tmpZipEntry = zippedImgs!![currentEntry!!.path + "/" + nextFrame.toString()]
-            if (tmpZipEntry == null) {
-                Log.w(tag, "tmpzipentry null, starting again from $nextFrame")
-
-                if (currentEntry!!.command == 'p' && virtualBootComplete) { // In theory only c and p work, but aosp does this.
-                    stop()
-                }
-
-                if ((currentEntry!!.count == curCount) || virtualBootComplete) {
-                    if (currentEntryNum + 1 >= desc!!.entries.size) {
-                        stop()
-                        return
-                    }
-                    switchEntry(currentEntryNum + 1)
-                } else {
-                    curCount += 1
-                }
-
-                nextFrame = 0
-                tmpZipEntry = zippedImgs!![currentEntry!!.path + "/" + nextFrame.toString()]
+            if ((currentEntry!!.count == curCount) || virtualBootComplete) {
+                frames.remove(currentEntry!!.path + "/" + nextFrame.toString())
             }
-            tmpBitmap = BitmapFactory.decodeStream(zipFile!!.getInputStream(tmpZipEntry))
+            Log.w(tag, "Fast way")
+        } else {
+            Log.e(tag, currentEntry!!.path + "/" + nextFrame.toString())
+            // We don't care, it's only done if the background thread is behind.
+            // Quick fail out due to risk of IndexOutOfBoundException
             canvas.drawBitmap(
-                tmpBitmap!!,
+                loadBitmap(currentEntry!!.path + "/" + nextFrame.toString()) ?: {
+                    Log.w(tag, "tmpzipentry null, starting again from $nextFrame")
+
+                    if (currentEntry!!.command == 'p' && virtualBootComplete) { // In theory only c and p work, but aosp does this.
+                        stop()
+                    }
+
+                    if ((currentEntry!!.count == curCount) || virtualBootComplete) {
+                        if (currentEntryNum + 1 >= desc!!.entries.size)
+                            stop() // Index out of bounds here because we have finished the animation, stop *right now*
+                        else
+                            switchEntry(currentEntryNum + 1)
+                    } else {
+                        curCount += 1
+                    }
+
+                    nextFrame = 0
+                    if (ended.not())
+                        loadBitmap(currentEntry!!.path + "/" + nextFrame.toString())!!
+                    else
+                        null
+                }() ?: return,
                 null,
-                currentEntry!!.trim?.getOrDefault(nextFrame, desc!!.defaultRect) ?: desc!!.defaultRect,
+                currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect),
                 null
             )
+            Log.w(tag, "Slow way")
         }
-        nextFrame++
+        Log.w(tag, "FRAME!!!!")
     }
 
     public override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -214,6 +232,7 @@ class BootanimationView : View {
     private fun tick() {
         if (ended.not()) {
             postDelayed({ tick() }, 1000L / desc!!.fps)
+            Log.w(tag, "FPS!")
             nextFrame++
             invalidate()
         }

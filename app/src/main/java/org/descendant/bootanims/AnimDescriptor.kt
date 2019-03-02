@@ -13,7 +13,7 @@ class AnimDescriptorEntry(
     val background: Int = 0
 ) {
 
-    var trim: ConcurrentHashMap<Int, Rect>? = null
+    var trim: ConcurrentHashMap<Int, Rect> = ConcurrentHashMap()
 
     companion object {
         fun fromString(desc: String): AnimDescriptorEntry {
