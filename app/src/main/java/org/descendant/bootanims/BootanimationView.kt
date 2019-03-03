@@ -13,6 +13,7 @@ import android.view.View
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.lang.ref.WeakReference
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipEntry
@@ -51,6 +52,13 @@ class BootanimationView : View {
     private var loaderThread: Thread? = null
 
     private var lastBitmap: Bitmap? = null
+
+    private var toRecycle: WeakReference<Bitmap?> = WeakReference(null)
+
+    private var transformW: Int = 0
+    private var transformH: Int = 0
+
+    private var lastFrame = 0
 
     constructor(context: Context) : super(context)
 
@@ -161,14 +169,15 @@ class BootanimationView : View {
                 if (entry.method == ZipEntry.STORED) {
                     if (entry.name.contains("/")) {
                         if (entry.name.split("/").first() in descPaths) {
-                            if ((entry.name.split("/").last().contains("audio.wav").not()) && (entry.name.split("/").last().contains(
+                            if ((entry.name.split("/").last().contains("audio.wav").not()) &&
+                                (entry.name.split("/").last().contains(
                                     "trim.txt"
                                 ).not())
                             ) {
                                 // YUS! It's a image we want!
                                 folder = entry.name.split("/").first()
-                                zippedImgs!![entry.name.split("/").first() + "/" + (i[folder] ?: 0).toString()] =
-                                    entry // i starts at 1
+                                zippedImgs!![entry.name.split("/").first() + "/" +
+                                        (i[folder] ?: 0).toString()] = entry // i starts at 1
                                 i[folder] = (i[folder] ?: 0) + 1
                                 Log.e(tag, folder + (i[folder].toString()))
                             }
@@ -195,13 +204,63 @@ class BootanimationView : View {
 
     private fun startLoaderThread() {
         loaderThread?.interrupt()
-        loaderThread = thread(start = true) {
+        loaderThread = thread(start = false) {
+            /*try {
+                var entry = currentEntryNum
+                var frame = nextFrame + 1
+                var iEnded = false
+                while (true) {
+                    (loadBitmap(desc!!.entries[entry].path + "/" + frame.toString()) ?: {
+                        Log.w(tag, "tmpzipentry null, starting again from $nextFrame")
+                        if (entry + 1 >= desc!!.entries.size)
+                            iEnded = true
+                        else {
+                            entry++
+                        }
 
-            for (img in zippedImgs!!.keys) {
-                if (Thread.currentThread().isInterrupted)
-                    break
-                frames[img] = loadBitmap(img) ?: continue
+                        nextFrame = 0
+                        if (iEnded.not())
+                            loadBitmap(currentEntry!!.path + "/" + nextFrame.toString())!!
+                        else
+                            null
+                    }())?.let { frames[desc!!.entries[entry].path + "/" + frame.toString()] = it }
+                    if (iEnded)
+                        break
+                    frame++
+                    if (entry < currentEntryNum) {
+                        entry = currentEntryNum
+                        frame = nextFrame + 2
+                    }
+                    if (entry == currentEntryNum && frame < nextFrame)
+                        Log.e(tag, "background thread behind on rendering")
+                    frame = nextFrame + 2
+                    while (frames.size > 10) {
+                        //Thread.sleep(1000L / desc!!.fps)
+                    }
+                }
+            } catch (e: InterruptedException) {
+                //ignore
+            }*/
+
+
+
+            try {
+                for (img in zippedImgs!!.keys.sorted()) {
+                    while (frames.size > 5 && frames.filter { it.value.isRecycled.not() }.size > 5) {
+                        Log.e(tag, "background thread sleeping $frames")
+                        Thread.sleep(1000L / desc!!.fps) // Buffer between 5 and 4 frames
+                        if (Thread.currentThread().isInterrupted)
+                            break
+                    }
+                    if (Thread.currentThread().isInterrupted)
+                        break
+                    Log.e(tag, "background thread working")
+                    frames[img] = loadBitmap(img) ?: continue
+                }
+            } catch (e: InterruptedException) {
+                // Ignore
             }
+
         }
     }
 
@@ -231,19 +290,12 @@ class BootanimationView : View {
         }
     }
 
+
+    //@SuppressLint("DrawAllocation")
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        if (zipFile == null)
-            ended = true
-        if (currentEntry == null)
-            ended = true
-        if ((delaying > -1) && (delaying < currentEntry!!.pause)) {
-            delaying++
-        } else {
-            delaying = -1
-        }
-        if (ended || ((delaying > -1) && (delaying < currentEntry!!.pause))) {
+        /*if (ended || ((delaying > -1) && (delaying < currentEntry!!.pause))) {
             canvas.drawBitmap(
                 lastBitmap ?: return,
                 null,
@@ -251,70 +303,86 @@ class BootanimationView : View {
                 null
             )
             return
-        }
+        }*/
 
+/*
         if (frames.containsKey(currentEntry!!.path + "/" + nextFrame.toString())) {
+
+            toRecycle = WeakReference(lastBitmap)
             lastBitmap = frames[currentEntry!!.path + "/" + nextFrame.toString()]!!
-            canvas.drawBitmap(
-                lastBitmap!!, null,
-                currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect), null
-            )
+            lastBitmap = lastBitmap!!.copy(lastBitmap!!.config, true)
+
+
             if ((currentEntry!!.count == curCount) || virtualBootComplete) {
+                frames[currentEntry!!.path + "/" + nextFrame.toString()]?.recycle()
                 frames.remove(currentEntry!!.path + "/" + nextFrame.toString())
             }
-            Log.w(tag, "Fast way")
+            Log.w(tag, "Fast rendering")
         } else {
             Log.e(tag, currentEntry!!.path + "/" + nextFrame.toString())
             // We don't care, it's only done if the background thread is behind.
             // Quick fail out due to risk of IndexOutOfBoundException
-            (loadBitmap(currentEntry!!.path + "/" + nextFrame.toString()) ?: {
-                Log.w(tag, "tmpzipentry null, starting again from $nextFrame")
+            toRecycle = WeakReference(lastBitmap)
+            lastBitmap = loadBitmap(currentEntry!!.path + "/" + nextFrame.toString())
 
-                if (currentEntry!!.command == 'p' && virtualBootComplete) { // In theory only c and p work, but aosp does this.
-                    stop()
-                }
+            Log.w(tag, "Slow rendering ${currentEntry!!.path + "/" + nextFrame.toString()}")
+        }*/
+        canvas.drawBitmap(
+            Bitmap.createScaledBitmap(lastBitmap!!, transformW, transformH, false),
+            null,
+            currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect), null
+        )
+        lastFrame = nextFrame
 
-                if ((currentEntry!!.count == curCount) || virtualBootComplete) {
-                    if (currentEntryNum + 1 >= desc!!.entries.size)
-                        stop() // Index out of bounds here because we have finished the animation, stop *right now*
-                    else
-                        switchEntry(currentEntryNum + 1)
-                } else {
-                    curCount += 1
-                }
+        //toRecycle.get()?.recycle()
+    }
 
-                nextFrame = 0
-                if (ended.not())
-                    loadBitmap(currentEntry!!.path + "/" + nextFrame.toString())!!
-                else
-                    null
-            }())?.let { lastBitmap = it }
-            canvas.drawBitmap(
-                lastBitmap!!,
-                null,
-                currentEntry!!.trim.getOrDefault(nextFrame, desc!!.defaultRect),
-                null
-            )
-            Log.w(tag, "Slow way")
-        }
-        Log.w(tag, "FRAME!!!!")
+    override fun getSuggestedMinimumHeight(): Int {
+        return desc?.height ?: super.getSuggestedMinimumHeight()
+    }
+
+    override fun getSuggestedMinimumWidth(): Int {
+        return desc?.width ?: super.getSuggestedMinimumWidth()
     }
 
     public override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val widthMode = MeasureSpec.getMode(widthMeasureSpec)
-        val widthSize = MeasureSpec.getSize(widthMeasureSpec)
+        var widthSize = MeasureSpec.getSize(widthMeasureSpec)
         val heightMode = MeasureSpec.getMode(heightMeasureSpec)
-        val heightSize = MeasureSpec.getSize(heightMeasureSpec)
-        if ((widthMode == MeasureSpec.EXACTLY) or (heightMode == MeasureSpec.EXACTLY))
-            throw IllegalStateException("View cannot have size set exactly.")
+        var heightSize = MeasureSpec.getSize(heightMeasureSpec)
+
+
         if (desc != null) {
-            if ((widthMode == MeasureSpec.AT_MOST) and (widthSize < desc!!.width))
-                throw IllegalStateException("Parent view is too thin to display this!")
-            if ((heightMode == MeasureSpec.AT_MOST) and (heightSize < desc!!.height))
-                throw IllegalStateException("Parent view is too short to display this! $heightSize < ${desc!!.height}")
-            setMeasuredDimension(desc!!.width, desc!!.height)
-        } else {
+
+            val ratioH = desc!!.height / desc!!.width
+            val ratioW = desc!!.width / desc!!.height
+
+            if (heightMode == MeasureSpec.UNSPECIFIED) {
+                heightSize = desc!!.height
+            }
+            if (widthMode == MeasureSpec.UNSPECIFIED) {
+                widthSize = desc!!.width
+            }
+
+            val rRatioW = widthSize / heightSize
+            val rRatioH = heightSize / widthSize
+
+            if (rRatioH > ratioH) { // If the ratioH we want is bigger than the ratioH we are are given, the provided frame is too wide, and we must reduce height to fit it
+                heightSize = ratioH * widthSize
+            }
+            if (rRatioW > ratioW) { // Likewise, if the ratioW is too large, we must reduce the image width
+                widthSize = ratioW * heightSize
+            }
+            if (rRatioH != ratioH || rRatioW != ratioW)
+                throw RuntimeException("programming error!")
+            // If they're the same, no work to do! yay
+        }
+        if (desc == null) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        } else {
+            transformW = widthSize
+            transformH = heightSize
+            setMeasuredDimension(widthSize, heightSize)
         }
     }
 
@@ -337,6 +405,9 @@ class BootanimationView : View {
     public fun stop() {
         loaderThread?.interrupt()
         frames.clear()
+        for (frame in frames.values) {
+            frame.recycle()
+        }
         ended = true
         stopped = true
     }
@@ -362,9 +433,46 @@ class BootanimationView : View {
     private fun tick() {
         if (ended.not()) {
             postDelayed({ tick() }, 1000L / desc!!.fps)
-            Log.w(tag, "FPS!")
             nextFrame++
-            invalidate()
+
+            thread(start = true) {
+                if (zipFile == null)
+                    stop()
+                if (currentEntry == null)
+                    stop()
+                if ((delaying > -1) && (delaying < currentEntry!!.pause)) {
+                    delaying++
+                } else {
+                    delaying = -1
+
+                    if ((currentEntry!!.path + "/" + nextFrame in zippedImgs!!.keys).not()) {
+                        nextFrame = 0
+
+                        if (currentEntry!!.command == 'p' && virtualBootComplete) { // Only c and p are allowed; aosp does this
+                            stop()
+                        }
+
+                        if ((currentEntry!!.count == curCount) || virtualBootComplete) {
+                            if (currentEntryNum + 1 >= desc!!.entries.size)
+                                stop() // Index out of bounds here because we have finished the animation, stop *right now*
+                            else {
+                                switchEntry(currentEntryNum + 1)
+                                /*for (frame in frames) {
+                            if (frame.key.split("/").first() == desc!!.entries[currentEntryNum - 1].path) {
+                                frame.value.recycle()
+                            }
+                        }*/
+                            }
+                        } else {
+                            curCount += 1
+                        }
+                    }
+                    if (ended.not()) {
+                        (loadBitmap(currentEntry!!.path + "/" + nextFrame))?.let { lastBitmap = it }
+                        invalidate()
+                    }
+                }
+            }
         }
     }
 
