@@ -47,9 +47,9 @@ class AnimDescriptorEntry(
                 if (elems[4].length != 7)
                     throw InvalidAnimationException(AnimErrors.BROKEN_DESC, "Invalid RGBHEX $elems")
                 try {
-                    background = elems[4].toInt(16)
+                    background = elems[4].substring(1).toInt(16)
                 } catch (e: Exception) {
-                    throw InvalidAnimationException(AnimErrors.BROKEN_DESC, "Failed to parse RGBHEX")
+                    throw InvalidAnimationException(AnimErrors.BROKEN_DESC, "Failed to parse RGBHEX $elems")
                 }
                 if (elems.size > 5) {
                     //TODO: CLOCK1
